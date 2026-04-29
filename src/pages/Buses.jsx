@@ -179,8 +179,8 @@ export default function Buses({ onMenuToggle, toast }) {
                     <tr key={bus.id} className={`border-b border-gray-50 last:border-0 hover:bg-gray-50 transition-colors ${!bus.activo ? 'opacity-50' : ''}`}>
                       <td className="table-cell font-bold text-gray-900">{bus.ppu}</td>
                       <td className="table-cell">{bus.numero_interno}</td>
-                      <td className="table-cell hidden sm:table-cell text-gray-500">{bus.modelos_bus?.nombre || '—'}</td>
-                      <td className="table-cell hidden md:table-cell text-gray-500">{bus.terminales?.nombre || '—'}</td>
+                      <td className="table-cell hidden sm:table-cell text-gray-500">{bus.modelo?.nombre || '—'}</td>
+                      <td className="table-cell hidden md:table-cell text-gray-500">{bus.terminal?.nombre || '—'}</td>
                       <td className="table-cell">
                         <BoolBadge value={bus.activo} trueLabel="Activo" falseLabel="Inactivo"
                           falseClass="bg-gray-100 text-gray-500 border border-gray-200" />

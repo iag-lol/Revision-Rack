@@ -388,7 +388,7 @@ export default function NuevaRevision({ onMenuToggle, toast }) {
                 <div className="flex-1">
                   <p className="font-bold text-gray-900">{bus.ppu} — N° {bus.numero_interno}</p>
                   <p className="text-sm text-gray-600">
-                    {bus.modelos_bus?.nombre || 'Sin modelo'} · {bus.terminales?.nombre || 'Sin terminal habitual'}
+                    {bus.modelo?.nombre || 'Sin modelo'} · {bus.terminal?.nombre || 'Sin terminal habitual'}
                   </p>
                 </div>
                 {nivelRiesgo && (
@@ -566,7 +566,7 @@ export default function NuevaRevision({ onMenuToggle, toast }) {
         <FormSection
           title="Estado de cerraduras"
           description={cerraduras.length > 0
-            ? `${cerraduras.length} cerradura(s) — ${bus?.modelos_bus?.nombre || ''}`
+            ? `${cerraduras.length} cerradura(s) — ${bus?.modelo?.nombre || ''}`
             : 'Indica si hay cerraduras en mal estado'}
           icon={Lock}
         >

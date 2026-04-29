@@ -93,3 +93,19 @@ npm run build
 ```
 
 Los archivos generados estarán en la carpeta `dist/` y pueden desplegarse en Vercel, Netlify, o cualquier servidor web estático.
+
+## 9. Deploy en Render (evitar 404 en rutas internas)
+
+Este repo incluye dos mecanismos para SPA fallback:
+
+1. `public/_redirects` con:
+```txt
+/* /index.html 200
+```
+2. `render.yaml` con `routes` de tipo `rewrite` hacia `/index.html`.
+
+Si ya tienes un sitio creado manualmente en Render, verifica en **Redirects/Rewrites** que exista:
+
+- Source: `/*`
+- Destination: `/index.html`
+- Action: `Rewrite`

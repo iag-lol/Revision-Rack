@@ -28,7 +28,7 @@ export default function BusAutocomplete({ label, field = 'ppu', value, onChange,
     if (!q || q.length < 1) { setResults([]); setOpen(false); return }
     setLoading(true)
     try {
-      const data = await searchBuses(q, field)
+      const data = await searchBuses(q)
       setResults(data)
       setOpen(true)
     } catch (e) {
@@ -36,7 +36,7 @@ export default function BusAutocomplete({ label, field = 'ppu', value, onChange,
     } finally {
       setLoading(false)
     }
-  }, [field])
+  }, [])
 
   const handleChange = (e) => {
     const val = e.target.value.toUpperCase()
@@ -92,7 +92,7 @@ export default function BusAutocomplete({ label, field = 'ppu', value, onChange,
                   <div className="min-w-0">
                     <p className="text-sm font-semibold text-gray-900">{bus.ppu}</p>
                     <p className="text-xs text-gray-500">
-                      N° {bus.numero_interno} · {bus.modelos_bus?.nombre || 'Sin modelo'} · {bus.terminales?.nombre || 'Sin terminal'}
+                      N° {bus.numero_interno} · {bus.modelo?.nombre || 'Sin modelo'} · {bus.terminal?.nombre || 'Sin terminal'}
                     </p>
                   </div>
                 </li>
