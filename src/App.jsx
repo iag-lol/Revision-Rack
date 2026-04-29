@@ -1,4 +1,6 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom'
+import { HashRouter, BrowserRouter, Routes, Route } from 'react-router-dom'
+
+const Router = import.meta.env.VITE_USE_HASH_ROUTER === 'true' ? HashRouter : BrowserRouter
 import MainLayout from './components/layout/MainLayout'
 import Dashboard from './pages/Dashboard'
 import NuevaRevision from './pages/NuevaRevision'
@@ -31,8 +33,8 @@ function AppContent() {
 
 export default function App() {
   return (
-    <BrowserRouter>
+    <Router>
       <AppContent />
-    </BrowserRouter>
+    </Router>
   )
 }
