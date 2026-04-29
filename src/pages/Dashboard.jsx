@@ -90,29 +90,29 @@ export default function Dashboard({ onMenuToggle }) {
   const [loading, setLoading]       = useState(true)
 
   const load = useCallback(async () => {
+    const EMPTY_FLEET = { fleet: [], total: 0, conDisco: 0, sinDisco: 0, posibleRobo: 0, enSRL: 0, sinRevision: 0 }
     setLoading(true)
-    try {
-      const [kData, fData, tData, mData, eData, tkData, vDisco] = await Promise.all([
-        getDashboardKPIs(),
-        getFleetStatus(),
-        getRevisionByTerminal(),
-        getModelosVulnerabilidad(),
-        getEvolucionTemporal(30),
-        getRecentOpenTickets(5),
-        getConfig('valor_unitario_disco')
-      ])
-      setKpis(kData)
-      setFleet(fData)
-      setTerminales(tData)
-      setModelos(mData)
-      setEvolucion(eData)
-      setTickets(tkData)
-      setValorDisco(vDisco || '')
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setLoading(false)
-    }
+    // Each query fails independently — one error never blocks the others
+    const safe = (fn, fallback) => Promise.resolve().then(fn).catch(e => { console.error(e); return fallback })
+
+    const [kData, fData, tData, mData, eData, tkData, vDisco] = await Promise.all([
+      safe(getDashboardKPIs,           null),
+      safe(getFleetStatus,             EMPTY_FLEET),
+      safe(getRevisionByTerminal,      []),
+      safe(getModelosVulnerabilidad,   []),
+      safe(() => getEvolucionTemporal(30),    []),
+      safe(() => getRecentOpenTickets(5),     []),
+      safe(() => getConfig('valor_unitario_disco'), '')
+    ])
+
+    setKpis(kData)
+    setFleet(fData)
+    setTerminales(tData)
+    setModelos(mData)
+    setEvolucion(eData)
+    setTickets(tkData)
+    setValorDisco(vDisco || '')
+    setLoading(false)
   }, [])
 
   useEffect(() => { load() }, [load])

@@ -93,31 +93,41 @@ export const getModelosVulnerabilidad = async () => {
 }
 
 export const getFleetStatus = async () => {
-  const [busesRes, revisionesRes] = await Promise.all([
-    supabase
+  // Explicit FK hints to avoid PostgREST ambiguity with non-standard FK column names
+  let busesData = null
+  const busesRes = await supabase
+    .from('buses')
+    .select(`id, ppu, numero_interno, modelos_bus!modelo_id(nombre), terminales!terminal_habitual_id(nombre)`)
+    .eq('activo', true)
+    .order('ppu')
+
+  if (busesRes.error) {
+    // Fallback: query without joins in case hint fails on older PostgREST
+    const fallback = await supabase
       .from('buses')
-      .select(`id, ppu, numero_interno, modelos_bus(nombre), terminales(nombre)`)
+      .select('id, ppu, numero_interno')
       .eq('activo', true)
-      .order('ppu'),
-    supabase
-      .from('revisiones_rack')
-      .select('bus_id, tiene_disco, motivo_sin_disco, tiene_candado, fecha_revision, created_at')
-      .order('fecha_revision', { ascending: false })
-      .order('created_at', { ascending: false })
-  ])
+      .order('ppu')
+    if (fallback.error) throw fallback.error
+    busesData = fallback.data || []
+  } else {
+    busesData = busesRes.data || []
+  }
 
-  if (busesRes.error) throw busesRes.error
-  if (revisionesRes.error) throw revisionesRes.error
+  const revisionesRes = await supabase
+    .from('revisiones_rack')
+    .select('bus_id, tiene_disco, motivo_sin_disco, fecha_revision, created_at')
+    .order('fecha_revision', { ascending: false })
+    .order('created_at', { ascending: false })
 
-  const buses = busesRes.data || []
-  const revisiones = revisionesRes.data || []
+  const revisiones = revisionesRes.error ? [] : (revisionesRes.data || [])
 
   const latestRev = {}
   for (const r of revisiones) {
     if (!latestRev[r.bus_id]) latestRev[r.bus_id] = r
   }
 
-  const fleet = buses.map(b => ({
+  const fleet = busesData.map(b => ({
     id: b.id,
     ppu: b.ppu,
     numero_interno: b.numero_interno,
@@ -129,11 +139,11 @@ export const getFleetStatus = async () => {
   return {
     fleet,
     total: fleet.length,
-    conDisco:      fleet.filter(b => b.ultima_revision?.tiene_disco === true).length,
-    sinDisco:      fleet.filter(b => b.ultima_revision?.tiene_disco === false).length,
-    posibleRobo:   fleet.filter(b => b.ultima_revision?.motivo_sin_disco === 'POSIBLE_ROBO').length,
-    enSRL:         fleet.filter(b => b.ultima_revision?.motivo_sin_disco === 'RETIRADO_SRL').length,
-    sinRevision:   fleet.filter(b => !b.ultima_revision).length
+    conDisco:    fleet.filter(b => b.ultima_revision?.tiene_disco === true).length,
+    sinDisco:    fleet.filter(b => b.ultima_revision?.tiene_disco === false).length,
+    posibleRobo: fleet.filter(b => b.ultima_revision?.motivo_sin_disco === 'POSIBLE_ROBO').length,
+    enSRL:       fleet.filter(b => b.ultima_revision?.motivo_sin_disco === 'RETIRADO_SRL').length,
+    sinRevision: fleet.filter(b => !b.ultima_revision).length
   }
 }
 
