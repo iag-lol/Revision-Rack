@@ -92,6 +92,51 @@ export const getModelosVulnerabilidad = async () => {
   return Object.values(map).sort((a, b) => b.sin_disco - a.sin_disco).slice(0, 6)
 }
 
+export const getFleetStatus = async () => {
+  const [busesRes, revisionesRes] = await Promise.all([
+    supabase
+      .from('buses')
+      .select(`id, ppu, numero_interno, modelos_bus(nombre), terminales(nombre)`)
+      .eq('activo', true)
+      .order('ppu'),
+    supabase
+      .from('revisiones_rack')
+      .select('bus_id, tiene_disco, motivo_sin_disco, tiene_candado, fecha_revision, created_at')
+      .order('fecha_revision', { ascending: false })
+      .order('created_at', { ascending: false })
+  ])
+
+  if (busesRes.error) throw busesRes.error
+  if (revisionesRes.error) throw revisionesRes.error
+
+  const buses = busesRes.data || []
+  const revisiones = revisionesRes.data || []
+
+  const latestRev = {}
+  for (const r of revisiones) {
+    if (!latestRev[r.bus_id]) latestRev[r.bus_id] = r
+  }
+
+  const fleet = buses.map(b => ({
+    id: b.id,
+    ppu: b.ppu,
+    numero_interno: b.numero_interno,
+    modelo: b.modelos_bus?.nombre || '—',
+    terminal: b.terminales?.nombre || '—',
+    ultima_revision: latestRev[b.id] || null
+  }))
+
+  return {
+    fleet,
+    total: fleet.length,
+    conDisco:      fleet.filter(b => b.ultima_revision?.tiene_disco === true).length,
+    sinDisco:      fleet.filter(b => b.ultima_revision?.tiene_disco === false).length,
+    posibleRobo:   fleet.filter(b => b.ultima_revision?.motivo_sin_disco === 'POSIBLE_ROBO').length,
+    enSRL:         fleet.filter(b => b.ultima_revision?.motivo_sin_disco === 'RETIRADO_SRL').length,
+    sinRevision:   fleet.filter(b => !b.ultima_revision).length
+  }
+}
+
 export const getRecentOpenTickets = async (limit = 5) => {
   const { data, error } = await supabase
     .from('tickets_robo')

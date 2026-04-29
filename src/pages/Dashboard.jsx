@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Bus, Disc, AlertTriangle, CheckCircle, Lock,
   ShieldCheck, DollarSign, Ticket, RefreshCw,
-  Activity, TrendingUp, Wrench, AlertCircle
+  Activity, TrendingUp, Wrench, AlertCircle, MinusCircle
 } from 'lucide-react'
 import {
   AreaChart, Area, PieChart, Pie, Cell,
@@ -13,31 +13,29 @@ import {
   getDashboardKPIs,
   getRevisionByTerminal,
   getModelosVulnerabilidad,
-  getRecentOpenTickets
+  getRecentOpenTickets,
+  getFleetStatus
 } from '../services/dashboardService'
 import { getEvolucionTemporal } from '../services/revisionService'
 import { getConfig } from '../services/configService'
 import { formatCurrency } from '../utils/formatters'
 import { formatDate } from '../utils/dateUtils'
 
-function calcHealthScore(kpis) {
-  if (!kpis || kpis.totalRevisiones === 0) return 0
-  const d = kpis.conDisco / kpis.totalRevisiones
-  const c = kpis.conCandado / kpis.totalRevisiones
-  const s = kpis.conSegExtra / kpis.totalRevisiones
-  return Math.round((d * 0.5 + c * 0.3 + s * 0.2) * 100)
+function calcHealthScore(fleet) {
+  if (!fleet || fleet.total === 0) return 0
+  const revisados = fleet.total - fleet.sinRevision
+  if (revisados === 0) return 0
+  return Math.round((fleet.conDisco / fleet.total) * 100)
 }
 
 function healthMeta(score) {
-  if (score >= 80) return { label: 'Óptimo', color: '#10b981', text: 'text-emerald-400' }
-  if (score >= 60) return { label: 'Aceptable', color: '#f59e0b', text: 'text-amber-400' }
-  if (score >= 40) return { label: 'Degradado', color: '#f97316', text: 'text-orange-400' }
-  return { label: 'Crítico', color: '#ef4444', text: 'text-red-400' }
+  if (score >= 80) return { label: 'Óptimo',    color: '#10b981', text: 'text-emerald-400' }
+  if (score >= 60) return { label: 'Aceptable', color: '#f59e0b', text: 'text-amber-400'   }
+  if (score >= 40) return { label: 'Degradado', color: '#f97316', text: 'text-orange-400'  }
+  return               { label: 'Crítico',    color: '#ef4444', text: 'text-red-400'     }
 }
 
-function pct(n, d) {
-  return d > 0 ? Math.round((n / d) * 100) : 0
-}
+function pct(n, d) { return d > 0 ? Math.round((n / d) * 100) : 0 }
 
 function CircularGauge({ score, color }) {
   const r = 42
@@ -47,13 +45,9 @@ function CircularGauge({ score, color }) {
     <svg width="110" height="110" viewBox="0 0 110 110" className="flex-shrink-0">
       <circle cx="55" cy="55" r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="10" />
       <circle
-        cx="55" cy="55" r={r}
-        fill="none" stroke={color} strokeWidth="10"
-        strokeLinecap="round"
-        strokeDasharray={circ}
-        strokeDashoffset={offset}
-        transform="rotate(-90 55 55)"
-        style={{ transition: 'stroke-dashoffset 1s ease' }}
+        cx="55" cy="55" r={r} fill="none" stroke={color} strokeWidth="10"
+        strokeLinecap="round" strokeDasharray={circ} strokeDashoffset={offset}
+        transform="rotate(-90 55 55)" style={{ transition: 'stroke-dashoffset 1s ease' }}
       />
       <text x="55" y="51" textAnchor="middle" fill="white" fontSize="22" fontWeight="900" fontFamily="system-ui">{score}</text>
       <text x="55" y="67" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="10" fontFamily="system-ui">/100</text>
@@ -77,20 +71,30 @@ function CustomTooltip({ active, payload, label }) {
   )
 }
 
+function BusStatusBadge({ rev }) {
+  if (!rev)                                   return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-gray-100 text-gray-400">Sin revisión</span>
+  if (rev.tiene_disco)                        return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">Con disco</span>
+  if (rev.motivo_sin_disco === 'POSIBLE_ROBO') return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-100 text-red-700">Posible robo</span>
+  if (rev.motivo_sin_disco === 'RETIRADO_SRL') return <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-blue-100 text-blue-700">En SRL</span>
+  return                                              <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-amber-100 text-amber-700">Sin disco</span>
+}
+
 export default function Dashboard({ onMenuToggle }) {
-  const [kpis, setKpis] = useState(null)
+  const [kpis, setKpis]             = useState(null)
+  const [fleet, setFleet]           = useState(null)
   const [terminales, setTerminales] = useState([])
-  const [modelos, setModelos] = useState([])
-  const [evolucion, setEvolucion] = useState([])
-  const [tickets, setTickets] = useState([])
+  const [modelos, setModelos]       = useState([])
+  const [evolucion, setEvolucion]   = useState([])
+  const [tickets, setTickets]       = useState([])
   const [valorDisco, setValorDisco] = useState('')
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading]       = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [kData, tData, mData, eData, tkData, vDisco] = await Promise.all([
+      const [kData, fData, tData, mData, eData, tkData, vDisco] = await Promise.all([
         getDashboardKPIs(),
+        getFleetStatus(),
         getRevisionByTerminal(),
         getModelosVulnerabilidad(),
         getEvolucionTemporal(30),
@@ -98,6 +102,7 @@ export default function Dashboard({ onMenuToggle }) {
         getConfig('valor_unitario_disco')
       ])
       setKpis(kData)
+      setFleet(fData)
       setTerminales(tData)
       setModelos(mData)
       setEvolucion(eData)
@@ -112,20 +117,21 @@ export default function Dashboard({ onMenuToggle }) {
 
   useEffect(() => { load() }, [load])
 
-  const healthScore = kpis ? calcHealthScore(kpis) : 0
-  const meta = healthMeta(healthScore)
-  const impacto = kpis && valorDisco ? kpis.posibleRobo * Number(valorDisco) : null
+  const healthScore = fleet ? calcHealthScore(fleet) : 0
+  const meta        = healthMeta(healthScore)
+  const impacto     = kpis && valorDisco ? kpis.posibleRobo * Number(valorDisco) : null
 
-  const discoData = kpis ? [
-    { name: 'Con disco',    value: kpis.conDisco,    color: '#10b981' },
-    { name: 'SRL',          value: kpis.retiradoSRL, color: '#3b82f6' },
-    { name: 'Posible robo', value: kpis.posibleRobo, color: '#ef4444' },
-    { name: 'Otro',         value: Math.max(0, kpis.sinDisco - kpis.retiradoSRL - kpis.posibleRobo), color: '#94a3b8' }
+  const discoData = fleet ? [
+    { name: 'Con disco',    value: fleet.conDisco,    color: '#10b981' },
+    { name: 'En SRL',       value: fleet.enSRL,       color: '#3b82f6' },
+    { name: 'Posible robo', value: fleet.posibleRobo, color: '#ef4444' },
+    { name: 'Sin revisión', value: fleet.sinRevision, color: '#e2e8f0' },
+    { name: 'Sin disco',    value: Math.max(0, fleet.sinDisco - fleet.posibleRobo - fleet.enSRL), color: '#f59e0b' }
   ].filter(d => d.value > 0) : []
 
-  const discoPct   = kpis ? pct(kpis.conDisco,    kpis.totalRevisiones) : 0
-  const candadoPct = kpis ? pct(kpis.conCandado,   kpis.totalRevisiones) : 0
-  const segPct     = kpis ? pct(kpis.conSegExtra,  kpis.totalRevisiones) : 0
+  const discoPct   = fleet ? pct(fleet.conDisco,    fleet.total) : 0
+  const sinDiscoPct = fleet ? pct(fleet.sinDisco,   fleet.total) : 0
+  const sinRevPct  = fleet ? pct(fleet.sinRevision, fleet.total) : 0
 
   if (loading) {
     return (
@@ -170,39 +176,39 @@ export default function Dashboard({ onMenuToggle }) {
         </div>
       )}
 
-      {/* Hero section */}
+      {/* ── Hero section ── */}
       <div className="bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white">
         <div className="p-4 lg:p-6">
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-center">
 
-            {/* Fleet Health Score */}
+            {/* Fleet Health Score — basado en buses reales */}
             <div className="flex items-center gap-5">
               <CircularGauge score={healthScore} color={meta.color} />
               <div>
                 <p className="text-slate-400 text-xs uppercase tracking-widest mb-0.5">Salud de la Flota</p>
                 <p className={`text-5xl font-black leading-none ${meta.text}`}>{healthScore}</p>
                 <p className="text-white font-semibold text-sm mt-1">{meta.label}</p>
-                <p className="text-slate-500 text-xs mt-0.5">Índice compuesto (disco 50 · candado 30 · seg. 20)</p>
+                <p className="text-slate-500 text-xs mt-0.5">% buses con disco (última revisión)</p>
               </div>
             </div>
 
-            {/* Quick stats grid */}
+            {/* Fleet counters */}
             <div className="grid grid-cols-2 gap-3">
               <div className="bg-white/5 rounded-xl p-3 border border-white/10">
                 <p className="text-slate-400 text-xs">Buses activos</p>
-                <p className="text-2xl font-black text-white">{kpis?.totalBuses ?? 0}</p>
+                <p className="text-2xl font-black text-white">{fleet?.total ?? 0}</p>
               </div>
               <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-                <p className="text-slate-400 text-xs">Revisiones totales</p>
-                <p className="text-2xl font-black text-white">{kpis?.totalRevisiones ?? 0}</p>
+                <p className="text-slate-400 text-xs">Con disco</p>
+                <p className="text-2xl font-black text-emerald-400">{fleet?.conDisco ?? 0}</p>
               </div>
               <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-                <p className="text-slate-400 text-xs">Esta semana</p>
-                <p className="text-2xl font-black text-blue-300">{kpis?.revSemana ?? 0}</p>
+                <p className="text-slate-400 text-xs">Sin disco</p>
+                <p className="text-2xl font-black text-red-400">{fleet?.sinDisco ?? 0}</p>
               </div>
               <div className="bg-white/5 rounded-xl p-3 border border-white/10">
-                <p className="text-slate-400 text-xs">Discos OK</p>
-                <p className="text-2xl font-black text-emerald-400">{discoPct}%</p>
+                <p className="text-slate-400 text-xs">Sin revisión</p>
+                <p className="text-2xl font-black text-slate-400">{fleet?.sinRevision ?? 0}</p>
               </div>
             </div>
 
@@ -217,7 +223,7 @@ export default function Dashboard({ onMenuToggle }) {
                   {impacto !== null ? formatCurrency(impacto) : valorDisco ? formatCurrency(0) : '— Sin configurar'}
                 </p>
                 <p className="text-xs text-red-300 mt-0.5">
-                  {kpis?.posibleRobo ?? 0} posible{kpis?.posibleRobo !== 1 ? 's' : ''} robo
+                  {fleet?.posibleRobo ?? 0} posible{fleet?.posibleRobo !== 1 ? 's' : ''} robo
                   {valorDisco ? ` × ${formatCurrency(valorDisco)}` : ''}
                 </p>
               </div>
@@ -228,11 +234,11 @@ export default function Dashboard({ onMenuToggle }) {
                 </div>
                 <div className="bg-amber-500/20 border border-amber-500/30 rounded-lg p-2.5">
                   <p className="text-xs text-amber-300">Robos</p>
-                  <p className="text-xl font-black text-white">{kpis?.posibleRobo ?? 0}</p>
+                  <p className="text-xl font-black text-white">{fleet?.posibleRobo ?? 0}</p>
                 </div>
                 <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-2.5">
-                  <p className="text-xs text-blue-300">SRL</p>
-                  <p className="text-xl font-black text-white">{kpis?.retiradoSRL ?? 0}</p>
+                  <p className="text-xs text-blue-300">En SRL</p>
+                  <p className="text-xl font-black text-white">{fleet?.enSRL ?? 0}</p>
                 </div>
               </div>
             </div>
@@ -240,39 +246,157 @@ export default function Dashboard({ onMenuToggle }) {
         </div>
       </div>
 
-      {/* Main content */}
+      {/* ── Main content ── */}
       <div className="p-4 lg:p-6 space-y-5">
 
-        {/* Compliance progress bars */}
+        {/* ── ESTADO ACTUAL DE LA FLOTA ── */}
+        <div className="card p-5">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h3 className="text-sm font-semibold text-gray-800">Estado actual de la flota</h3>
+              <p className="text-xs text-gray-400">Última revisión registrada por cada bus</p>
+            </div>
+            <Bus size={18} className="text-gray-300" />
+          </div>
+
+          {/* Fleet summary cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-5">
+            <div className="bg-blue-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-blue-700">{fleet?.total ?? 0}</p>
+              <p className="text-xs text-blue-500 mt-0.5 font-medium">Activos</p>
+            </div>
+            <div className="bg-emerald-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-emerald-700">{fleet?.conDisco ?? 0}</p>
+              <p className="text-xs text-emerald-500 mt-0.5 font-medium">Con disco</p>
+              <p className="text-xs text-emerald-400">{discoPct}%</p>
+            </div>
+            <div className="bg-red-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-red-700">{fleet?.sinDisco ?? 0}</p>
+              <p className="text-xs text-red-500 mt-0.5 font-medium">Sin disco</p>
+              <p className="text-xs text-red-400">{sinDiscoPct}%</p>
+            </div>
+            <div className="bg-amber-50 rounded-xl p-3 text-center">
+              <p className="text-2xl font-black text-amber-700">{fleet?.posibleRobo ?? 0}</p>
+              <p className="text-xs text-amber-500 mt-0.5 font-medium">Posible robo</p>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-3 text-center border border-dashed border-gray-200">
+              <p className="text-2xl font-black text-gray-400">{fleet?.sinRevision ?? 0}</p>
+              <p className="text-xs text-gray-400 mt-0.5 font-medium">Sin revisión</p>
+              <p className="text-xs text-gray-300">{sinRevPct}%</p>
+            </div>
+          </div>
+
+          {/* Fleet progress bar */}
+          {fleet && fleet.total > 0 && (
+            <div className="mb-5">
+              <div className="flex h-3 rounded-full overflow-hidden gap-px bg-gray-100">
+                {fleet.conDisco > 0 && (
+                  <div className="bg-emerald-500 transition-all" style={{ width: `${pct(fleet.conDisco, fleet.total)}%` }} title={`Con disco: ${fleet.conDisco}`} />
+                )}
+                {fleet.enSRL > 0 && (
+                  <div className="bg-blue-400 transition-all" style={{ width: `${pct(fleet.enSRL, fleet.total)}%` }} title={`En SRL: ${fleet.enSRL}`} />
+                )}
+                {fleet.posibleRobo > 0 && (
+                  <div className="bg-red-500 transition-all" style={{ width: `${pct(fleet.posibleRobo, fleet.total)}%` }} title={`Posible robo: ${fleet.posibleRobo}`} />
+                )}
+                {(fleet.sinDisco - fleet.posibleRobo - fleet.enSRL) > 0 && (
+                  <div className="bg-amber-400 transition-all" style={{ width: `${pct(Math.max(0, fleet.sinDisco - fleet.posibleRobo - fleet.enSRL), fleet.total)}%` }} />
+                )}
+                {fleet.sinRevision > 0 && (
+                  <div className="bg-gray-200 transition-all" style={{ width: `${pct(fleet.sinRevision, fleet.total)}%` }} />
+                )}
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2">
+                {[
+                  { color: 'bg-emerald-500', label: 'Con disco' },
+                  { color: 'bg-blue-400',    label: 'En SRL' },
+                  { color: 'bg-red-500',     label: 'Posible robo' },
+                  { color: 'bg-amber-400',   label: 'Sin disco' },
+                  { color: 'bg-gray-200 border border-gray-300', label: 'Sin revisión' },
+                ].map((l, i) => (
+                  <div key={i} className="flex items-center gap-1.5">
+                    <div className={`w-2.5 h-2.5 rounded-sm ${l.color}`} />
+                    <span className="text-xs text-gray-400">{l.label}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Fleet table */}
+          {fleet && fleet.fleet.length > 0 ? (
+            <div className="overflow-x-auto">
+              <div className="max-h-80 overflow-y-auto rounded-lg border border-gray-100">
+                <table className="w-full text-left text-sm">
+                  <thead className="sticky top-0 bg-gray-50 z-10">
+                    <tr>
+                      <th className="py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">PPU</th>
+                      <th className="py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide hidden sm:table-cell">N° Int.</th>
+                      <th className="py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide hidden md:table-cell">Modelo</th>
+                      <th className="py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide hidden lg:table-cell">Terminal</th>
+                      <th className="py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide">Estado disco</th>
+                      <th className="py-2 px-3 text-xs font-semibold text-gray-400 uppercase tracking-wide hidden md:table-cell">Última revisión</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-50">
+                    {fleet.fleet.map(bus => (
+                      <tr key={bus.id} className="hover:bg-gray-50 transition-colors">
+                        <td className="py-2.5 px-3 font-bold text-gray-900">{bus.ppu}</td>
+                        <td className="py-2.5 px-3 text-gray-500 hidden sm:table-cell">{bus.numero_interno}</td>
+                        <td className="py-2.5 px-3 text-gray-400 text-xs hidden md:table-cell">{bus.modelo}</td>
+                        <td className="py-2.5 px-3 text-gray-400 text-xs hidden lg:table-cell">{bus.terminal}</td>
+                        <td className="py-2.5 px-3"><BusStatusBadge rev={bus.ultima_revision} /></td>
+                        <td className="py-2.5 px-3 text-gray-400 text-xs hidden md:table-cell">
+                          {bus.ultima_revision ? formatDate(bus.ultima_revision.fecha_revision) : '—'}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : (
+            <div className="flex flex-col items-center justify-center h-24 text-gray-300">
+              <Bus size={28} className="mb-1" />
+              <span className="text-sm text-gray-400">No hay buses registrados</span>
+            </div>
+          )}
+        </div>
+
+        {/* ── Compliance progress bars ── */}
         <div className="card p-4 lg:p-5">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-4">Indicadores de cumplimiento</h3>
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-4">Cobertura en revisiones históricas</h3>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
             {[
-              { label: 'Discos instalados',   value: discoPct,   count: kpis?.conDisco,   color: 'bg-emerald-500', Icon: Disc        },
-              { label: 'Candados instalados', value: candadoPct, count: kpis?.conCandado,  color: 'bg-blue-500',    Icon: Lock        },
-              { label: 'Seguridad extra',     value: segPct,     count: kpis?.conSegExtra, color: 'bg-violet-500',  Icon: ShieldCheck }
-            ].map(({ label, value, count, color, Icon }, i) => (
+              { label: 'Revisiones con disco',        value: pct(kpis?.conDisco,    kpis?.totalRevisiones), count: kpis?.conDisco,    Icon: Disc        },
+              { label: 'Revisiones con candado',       value: pct(kpis?.conCandado,  kpis?.totalRevisiones), count: kpis?.conCandado,  Icon: Lock        },
+              { label: 'Revisiones con seg. extra',    value: pct(kpis?.conSegExtra, kpis?.totalRevisiones), count: kpis?.conSegExtra, Icon: ShieldCheck }
+            ].map(({ label, value, count, Icon }, i) => (
               <div key={i}>
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     <Icon size={14} className="text-gray-400" />
                     <span className="text-sm font-medium text-gray-700">{label}</span>
                   </div>
-                  <span className="text-lg font-black text-gray-900">{value}%</span>
+                  <span className="text-lg font-black text-gray-900">{value ?? 0}%</span>
                 </div>
                 <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
-                  <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${value}%` }} />
+                  <div
+                    className={`h-full rounded-full transition-all duration-700 ${
+                      (value ?? 0) >= 80 ? 'bg-emerald-500' : (value ?? 0) >= 60 ? 'bg-amber-500' : 'bg-red-500'
+                    }`}
+                    style={{ width: `${value ?? 0}%` }}
+                  />
                 </div>
-                <p className="text-xs text-gray-400 mt-1">{count ?? 0} de {kpis?.totalRevisiones ?? 0} revisiones</p>
+                <p className="text-xs text-gray-400 mt-1">{count ?? 0} de {kpis?.totalRevisiones ?? 0} revisiones totales</p>
               </div>
             ))}
           </div>
         </div>
 
-        {/* Trend chart + donut */}
+        {/* ── Trend chart + donut ── */}
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
-          {/* Area chart */}
           <div className="lg:col-span-3 card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -312,12 +436,11 @@ export default function Dashboard({ onMenuToggle }) {
             )}
           </div>
 
-          {/* Donut chart */}
           <div className="lg:col-span-2 card p-5">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="text-sm font-semibold text-gray-800">Distribución de discos</h3>
-                <p className="text-xs text-gray-400">Estado actual de la flota</p>
+                <h3 className="text-sm font-semibold text-gray-800">Distribución de la flota</h3>
+                <p className="text-xs text-gray-400">Estado actual por bus</p>
               </div>
               <Disc size={18} className="text-gray-300" />
             </div>
@@ -325,11 +448,7 @@ export default function Dashboard({ onMenuToggle }) {
               <>
                 <ResponsiveContainer width="100%" height={170}>
                   <PieChart>
-                    <Pie
-                      data={discoData} cx="50%" cy="50%"
-                      innerRadius={52} outerRadius={75}
-                      paddingAngle={3} dataKey="value"
-                    >
+                    <Pie data={discoData} cx="50%" cy="50%" innerRadius={52} outerRadius={75} paddingAngle={3} dataKey="value">
                       {discoData.map((entry, i) => <Cell key={i} fill={entry.color} strokeWidth={0} />)}
                     </Pie>
                     <Tooltip
@@ -357,10 +476,9 @@ export default function Dashboard({ onMenuToggle }) {
           </div>
         </div>
 
-        {/* Terminal performance + recent tickets */}
+        {/* ── Terminal performance + recent tickets ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-          {/* Terminal performance */}
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-800">Rendimiento por terminal</h3>
@@ -370,7 +488,7 @@ export default function Dashboard({ onMenuToggle }) {
               <div className="space-y-3">
                 {terminales.map((t, i) => {
                   const incPct = pct(t.sin_disco, t.total)
-                  const barWidth = terminales[0].total > 0 ? `${(t.total / terminales[0].total) * 100}%` : '0%'
+                  const barW = terminales[0].total > 0 ? `${(t.total / terminales[0].total) * 100}%` : '0%'
                   const [barColor, badge, badgeLabel] =
                     incPct < 10
                       ? ['bg-emerald-500', 'bg-emerald-100 text-emerald-700', 'Óptimo']
@@ -390,7 +508,7 @@ export default function Dashboard({ onMenuToggle }) {
                         </div>
                       </div>
                       <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                        <div className={`h-full ${barColor} rounded-full`} style={{ width: barWidth }} />
+                        <div className={`h-full ${barColor} rounded-full`} style={{ width: barW }} />
                       </div>
                     </div>
                   )
@@ -401,7 +519,6 @@ export default function Dashboard({ onMenuToggle }) {
             )}
           </div>
 
-          {/* Recent open tickets */}
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-800">Tickets abiertos recientes</h3>
@@ -450,10 +567,9 @@ export default function Dashboard({ onMenuToggle }) {
           </div>
         </div>
 
-        {/* Model vulnerability + other indicators */}
+        {/* ── Model vulnerability + other indicators ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
 
-          {/* Model vulnerability ranking */}
           <div className="card p-5">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-sm font-semibold text-gray-800">Vulnerabilidad por modelo</h3>
@@ -471,16 +587,13 @@ export default function Dashboard({ onMenuToggle }) {
                           <span className="text-xs font-bold text-gray-300 w-4">{i + 1}</span>
                           <span className="text-sm font-medium text-gray-800">{m.modelo}</span>
                         </div>
-                        <div className="text-right">
+                        <div>
                           <span className="text-xs font-black text-gray-800">{p}%</span>
                           <span className="text-xs text-gray-400 ml-1">({m.sin_disco}/{m.total})</span>
                         </div>
                       </div>
                       <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full rounded-full transition-all duration-500"
-                          style={{ width: `${p}%`, background: barColor }}
-                        />
+                        <div className="h-full rounded-full transition-all duration-500" style={{ width: `${p}%`, background: barColor }} />
                       </div>
                     </div>
                   )
@@ -491,15 +604,14 @@ export default function Dashboard({ onMenuToggle }) {
             )}
           </div>
 
-          {/* Other indicators */}
           <div className="card p-5">
             <h3 className="text-sm font-semibold text-gray-800 mb-4">Otros indicadores</h3>
             <div className="space-y-3">
               {[
                 { label: 'Cerraduras malas',    value: kpis?.cerrMalas   ?? 0, Icon: AlertTriangle, bg: 'bg-amber-50',  iconBg: 'bg-amber-500',  textColor: 'text-amber-600',  desc: 'revisiones con cerraduras en mal estado' },
-                { label: 'Sin seguridad extra', value: kpis?.sinSegExtra ?? 0, Icon: ShieldCheck,   bg: 'bg-slate-50',  iconBg: 'bg-slate-400',  textColor: 'text-slate-600',  desc: 'revisiones sin seguridad extra'          },
+                { label: 'Sin seguridad extra', value: kpis?.sinSegExtra ?? 0, Icon: MinusCircle,   bg: 'bg-slate-50',  iconBg: 'bg-slate-400',  textColor: 'text-slate-600',  desc: 'revisiones sin seguridad extra'          },
                 { label: 'Sin candado',         value: kpis?.sinCandado  ?? 0, Icon: Lock,          bg: 'bg-orange-50', iconBg: 'bg-orange-500', textColor: 'text-orange-600', desc: 'revisiones sin candado instalado'        },
-                { label: 'Enviados a SRL',      value: kpis?.retiradoSRL ?? 0, Icon: Wrench,        bg: 'bg-blue-50',   iconBg: 'bg-blue-500',   textColor: 'text-blue-600',   desc: 'discos en servicio técnico'             }
+                { label: 'Enviados a SRL',      value: fleet?.enSRL      ?? 0, Icon: Wrench,        bg: 'bg-blue-50',   iconBg: 'bg-blue-500',   textColor: 'text-blue-600',   desc: 'buses con disco en servicio técnico'    }
               ].map(({ label, value, Icon, bg, iconBg, textColor, desc }, i) => (
                 <div key={i} className={`flex items-center gap-3 p-3 rounded-lg ${bg}`}>
                   <div className={`w-8 h-8 ${iconBg} rounded-lg flex items-center justify-center flex-shrink-0`}>
