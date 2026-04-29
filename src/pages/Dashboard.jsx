@@ -1,46 +1,107 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
   Bus, Disc, AlertTriangle, CheckCircle, Lock,
-  ShieldCheck, Wrench, TrendingUp, DollarSign,
-  Ticket, BarChart2, RefreshCw
+  ShieldCheck, DollarSign, Ticket, RefreshCw,
+  Activity, TrendingUp, Wrench, AlertCircle
 } from 'lucide-react'
 import {
-  BarChart, Bar, PieChart, Pie, Cell, LineChart, Line,
+  AreaChart, Area, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from 'recharts'
 import Header from '../components/layout/Header'
-import KPICard from '../components/ui/KPICard'
-import { KPISkeleton } from '../components/ui/LoadingSkeleton'
-import { getDashboardKPIs, getRevisionByTerminal, getModelosVulnerabilidad } from '../services/dashboardService'
+import {
+  getDashboardKPIs,
+  getRevisionByTerminal,
+  getModelosVulnerabilidad,
+  getRecentOpenTickets
+} from '../services/dashboardService'
 import { getEvolucionTemporal } from '../services/revisionService'
 import { getConfig } from '../services/configService'
 import { formatCurrency } from '../utils/formatters'
 import { formatDate } from '../utils/dateUtils'
 
-const COLORS = ['#2563eb', '#16a34a', '#dc2626', '#d97706', '#0891b2', '#7c3aed']
+function calcHealthScore(kpis) {
+  if (!kpis || kpis.totalRevisiones === 0) return 0
+  const d = kpis.conDisco / kpis.totalRevisiones
+  const c = kpis.conCandado / kpis.totalRevisiones
+  const s = kpis.conSegExtra / kpis.totalRevisiones
+  return Math.round((d * 0.5 + c * 0.3 + s * 0.2) * 100)
+}
+
+function healthMeta(score) {
+  if (score >= 80) return { label: 'Óptimo', color: '#10b981', text: 'text-emerald-400' }
+  if (score >= 60) return { label: 'Aceptable', color: '#f59e0b', text: 'text-amber-400' }
+  if (score >= 40) return { label: 'Degradado', color: '#f97316', text: 'text-orange-400' }
+  return { label: 'Crítico', color: '#ef4444', text: 'text-red-400' }
+}
+
+function pct(n, d) {
+  return d > 0 ? Math.round((n / d) * 100) : 0
+}
+
+function CircularGauge({ score, color }) {
+  const r = 42
+  const circ = 2 * Math.PI * r
+  const offset = circ - (score / 100) * circ
+  return (
+    <svg width="110" height="110" viewBox="0 0 110 110" className="flex-shrink-0">
+      <circle cx="55" cy="55" r={r} fill="none" stroke="rgba(255,255,255,0.1)" strokeWidth="10" />
+      <circle
+        cx="55" cy="55" r={r}
+        fill="none" stroke={color} strokeWidth="10"
+        strokeLinecap="round"
+        strokeDasharray={circ}
+        strokeDashoffset={offset}
+        transform="rotate(-90 55 55)"
+        style={{ transition: 'stroke-dashoffset 1s ease' }}
+      />
+      <text x="55" y="51" textAnchor="middle" fill="white" fontSize="22" fontWeight="900" fontFamily="system-ui">{score}</text>
+      <text x="55" y="67" textAnchor="middle" fill="rgba(255,255,255,0.5)" fontSize="10" fontFamily="system-ui">/100</text>
+    </svg>
+  )
+}
+
+function CustomTooltip({ active, payload, label }) {
+  if (!active || !payload?.length) return null
+  return (
+    <div className="bg-slate-800 text-white rounded-lg p-3 shadow-xl text-xs border border-slate-700">
+      <p className="font-semibold mb-1.5 text-slate-300">{label}</p>
+      {payload.map((p, i) => (
+        <div key={i} className="flex items-center gap-2 py-0.5">
+          <div className="w-2 h-2 rounded-full" style={{ background: p.color }} />
+          <span className="text-slate-400">{p.name}:</span>
+          <span className="font-bold">{p.value}</span>
+        </div>
+      ))}
+    </div>
+  )
+}
 
 export default function Dashboard({ onMenuToggle }) {
   const [kpis, setKpis] = useState(null)
   const [terminales, setTerminales] = useState([])
   const [modelos, setModelos] = useState([])
   const [evolucion, setEvolucion] = useState([])
+  const [tickets, setTickets] = useState([])
   const [valorDisco, setValorDisco] = useState('')
   const [loading, setLoading] = useState(true)
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [kData, tData, mData, eData, vDisco] = await Promise.all([
+      const [kData, tData, mData, eData, tkData, vDisco] = await Promise.all([
         getDashboardKPIs(),
         getRevisionByTerminal(),
         getModelosVulnerabilidad(),
         getEvolucionTemporal(30),
+        getRecentOpenTickets(5),
         getConfig('valor_unitario_disco')
       ])
       setKpis(kData)
       setTerminales(tData)
       setModelos(mData)
       setEvolucion(eData)
+      setTickets(tkData)
       setValorDisco(vDisco || '')
     } catch (e) {
       console.error(e)
@@ -51,27 +112,42 @@ export default function Dashboard({ onMenuToggle }) {
 
   useEffect(() => { load() }, [load])
 
+  const healthScore = kpis ? calcHealthScore(kpis) : 0
+  const meta = healthMeta(healthScore)
+  const impacto = kpis && valorDisco ? kpis.posibleRobo * Number(valorDisco) : null
+
   const discoData = kpis ? [
-    { name: 'Con disco', value: kpis.conDisco, color: '#16a34a' },
-    { name: 'Sin disco SRL', value: kpis.retiradoSRL, color: '#2563eb' },
-    { name: 'Posible robo', value: kpis.posibleRobo, color: '#dc2626' },
-    { name: 'Sin disco', value: kpis.sinDisco - kpis.retiradoSRL - kpis.posibleRobo, color: '#9ca3af' }
+    { name: 'Con disco',    value: kpis.conDisco,    color: '#10b981' },
+    { name: 'SRL',          value: kpis.retiradoSRL, color: '#3b82f6' },
+    { name: 'Posible robo', value: kpis.posibleRobo, color: '#ef4444' },
+    { name: 'Otro',         value: Math.max(0, kpis.sinDisco - kpis.retiradoSRL - kpis.posibleRobo), color: '#94a3b8' }
   ].filter(d => d.value > 0) : []
 
-  const candadoData = kpis ? [
-    { name: 'Con candado', value: kpis.conCandado },
-    { name: 'Sin candado', value: kpis.sinCandado }
-  ] : []
+  const discoPct   = kpis ? pct(kpis.conDisco,    kpis.totalRevisiones) : 0
+  const candadoPct = kpis ? pct(kpis.conCandado,   kpis.totalRevisiones) : 0
+  const segPct     = kpis ? pct(kpis.conSegExtra,  kpis.totalRevisiones) : 0
 
-  const impactoEconomico = kpis && valorDisco
-    ? kpis.posibleRobo * Number(valorDisco)
-    : null
+  if (loading) {
+    return (
+      <div>
+        <Header title="Dashboard" subtitle="Centro de control operacional" onMenuToggle={onMenuToggle} />
+        <div className="p-6 space-y-4">
+          <div className="h-40 bg-slate-200 rounded-2xl animate-pulse" />
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <div key={i} className="h-24 bg-gray-200 rounded-xl animate-pulse" />
+            ))}
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   return (
-    <div>
+    <div className="bg-gray-50 min-h-screen">
       <Header
         title="Dashboard"
-        subtitle="Resumen operacional del sistema de revisión de racks"
+        subtitle="Centro de control operacional"
         onMenuToggle={onMenuToggle}
         actions={
           <button onClick={load} className="btn btn-secondary btn-sm">
@@ -81,206 +157,365 @@ export default function Dashboard({ onMenuToggle }) {
         }
       />
 
-      <div className="p-4 lg:p-6 space-y-6">
-        {/* KPIs Row 1 */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-4 gap-3 lg:gap-4">
-          {loading ? (
-            Array.from({ length: 8 }).map((_, i) => <KPISkeleton key={i} />)
-          ) : kpis ? (
-            <>
-              <KPICard title="Buses registrados"     value={kpis.totalBuses}      icon={Bus}         color="blue"  />
-              <KPICard title="Total revisiones"       value={kpis.totalRevisiones} icon={BarChart2}   color="sky"   />
-              <KPICard title="Revisiones esta semana" value={kpis.revSemana}       icon={CheckCircle} color="green" />
-              <KPICard title="Con disco"              value={kpis.conDisco}        icon={Disc}        color="green" />
-              <KPICard title="Sin disco"              value={kpis.sinDisco}        icon={Disc}        color="red"   subtitle={`${kpis.posibleRobo} posible robo · ${kpis.retiradoSRL} SRL`} />
-              <KPICard title="Posible robo"           value={kpis.posibleRobo}     icon={AlertTriangle} color="red" />
-              <KPICard title="Enviados a SRL"         value={kpis.retiradoSRL}     icon={Wrench}      color="sky"   />
-              <KPICard title="Con candado"            value={kpis.conCandado}      icon={Lock}        color="green" subtitle={`${kpis.sinCandado} sin candado`} />
-            </>
-          ) : null}
+      {/* Critical alert banner */}
+      {kpis?.ticketsAbiertos > 0 && (
+        <div className="bg-red-600 text-white px-4 py-2.5 flex items-center gap-3">
+          <AlertCircle size={18} className="animate-pulse flex-shrink-0" />
+          <span className="text-sm font-medium">
+            <span className="font-bold">
+              {kpis.ticketsAbiertos} ticket{kpis.ticketsAbiertos > 1 ? 's' : ''} de robo abierto{kpis.ticketsAbiertos > 1 ? 's' : ''}
+            </span>
+            {impacto ? ` — Impacto estimado: ${formatCurrency(impacto)}` : ''}
+          </span>
+        </div>
+      )}
+
+      {/* Hero section */}
+      <div className="bg-gradient-to-br from-slate-900 via-blue-950 to-slate-900 text-white">
+        <div className="p-4 lg:p-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-5 items-center">
+
+            {/* Fleet Health Score */}
+            <div className="flex items-center gap-5">
+              <CircularGauge score={healthScore} color={meta.color} />
+              <div>
+                <p className="text-slate-400 text-xs uppercase tracking-widest mb-0.5">Salud de la Flota</p>
+                <p className={`text-5xl font-black leading-none ${meta.text}`}>{healthScore}</p>
+                <p className="text-white font-semibold text-sm mt-1">{meta.label}</p>
+                <p className="text-slate-500 text-xs mt-0.5">Índice compuesto (disco 50 · candado 30 · seg. 20)</p>
+              </div>
+            </div>
+
+            {/* Quick stats grid */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                <p className="text-slate-400 text-xs">Buses activos</p>
+                <p className="text-2xl font-black text-white">{kpis?.totalBuses ?? 0}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                <p className="text-slate-400 text-xs">Revisiones totales</p>
+                <p className="text-2xl font-black text-white">{kpis?.totalRevisiones ?? 0}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                <p className="text-slate-400 text-xs">Esta semana</p>
+                <p className="text-2xl font-black text-blue-300">{kpis?.revSemana ?? 0}</p>
+              </div>
+              <div className="bg-white/5 rounded-xl p-3 border border-white/10">
+                <p className="text-slate-400 text-xs">Discos OK</p>
+                <p className="text-2xl font-black text-emerald-400">{discoPct}%</p>
+              </div>
+            </div>
+
+            {/* Economic impact + tickets */}
+            <div className="space-y-3">
+              <div className="bg-red-500/20 border border-red-500/40 rounded-xl p-3.5">
+                <div className="flex items-center gap-2 mb-1">
+                  <DollarSign size={15} className="text-red-400" />
+                  <span className="text-xs text-red-300 font-semibold uppercase tracking-wide">Impacto económico estimado</span>
+                </div>
+                <p className="text-2xl font-black text-white">
+                  {impacto !== null ? formatCurrency(impacto) : valorDisco ? formatCurrency(0) : '— Sin configurar'}
+                </p>
+                <p className="text-xs text-red-300 mt-0.5">
+                  {kpis?.posibleRobo ?? 0} posible{kpis?.posibleRobo !== 1 ? 's' : ''} robo
+                  {valorDisco ? ` × ${formatCurrency(valorDisco)}` : ''}
+                </p>
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-red-500/20 border border-red-500/30 rounded-lg p-2.5">
+                  <p className="text-xs text-red-300">Tickets</p>
+                  <p className="text-xl font-black text-white">{kpis?.ticketsAbiertos ?? 0}</p>
+                </div>
+                <div className="bg-amber-500/20 border border-amber-500/30 rounded-lg p-2.5">
+                  <p className="text-xs text-amber-300">Robos</p>
+                  <p className="text-xl font-black text-white">{kpis?.posibleRobo ?? 0}</p>
+                </div>
+                <div className="bg-blue-500/20 border border-blue-500/30 rounded-lg p-2.5">
+                  <p className="text-xs text-blue-300">SRL</p>
+                  <p className="text-xl font-black text-white">{kpis?.retiradoSRL ?? 0}</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Main content */}
+      <div className="p-4 lg:p-6 space-y-5">
+
+        {/* Compliance progress bars */}
+        <div className="card p-4 lg:p-5">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-widest mb-4">Indicadores de cumplimiento</h3>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+            {[
+              { label: 'Discos instalados',   value: discoPct,   count: kpis?.conDisco,   color: 'bg-emerald-500', Icon: Disc        },
+              { label: 'Candados instalados', value: candadoPct, count: kpis?.conCandado,  color: 'bg-blue-500',    Icon: Lock        },
+              { label: 'Seguridad extra',     value: segPct,     count: kpis?.conSegExtra, color: 'bg-violet-500',  Icon: ShieldCheck }
+            ].map(({ label, value, count, color, Icon }, i) => (
+              <div key={i}>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <Icon size={14} className="text-gray-400" />
+                    <span className="text-sm font-medium text-gray-700">{label}</span>
+                  </div>
+                  <span className="text-lg font-black text-gray-900">{value}%</span>
+                </div>
+                <div className="h-2.5 bg-gray-100 rounded-full overflow-hidden">
+                  <div className={`h-full ${color} rounded-full transition-all duration-700`} style={{ width: `${value}%` }} />
+                </div>
+                <p className="text-xs text-gray-400 mt-1">{count ?? 0} de {kpis?.totalRevisiones ?? 0} revisiones</p>
+              </div>
+            ))}
+          </div>
         </div>
 
-        {/* KPIs Row 2 */}
-        {!loading && kpis && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 lg:gap-4">
-            <KPICard title="Seguridad extra"      value={kpis.conSegExtra}    icon={ShieldCheck}  color="green"  subtitle={`${kpis.sinSegExtra} sin seguridad extra`} />
-            <KPICard title="Cerraduras malas"     value={kpis.cerrMalas}      icon={AlertTriangle} color="amber" />
-            <KPICard title="Tickets abiertos"     value={kpis.ticketsAbiertos} icon={Ticket}      color="red"   subtitle={`${kpis.ticketsCerrados} cerrados`} />
-            <KPICard
-              title="Impacto económico estimado"
-              value={impactoEconomico !== null ? formatCurrency(impactoEconomico) : (valorDisco ? formatCurrency(0) : 'Sin config.')}
-              icon={DollarSign}
-              color="violet"
-              subtitle={valorDisco ? `${kpis.posibleRobo} disco(s) × ${formatCurrency(valorDisco)}` : 'Configure valor del disco'}
-            />
-          </div>
-        )}
+        {/* Trend chart + donut */}
+        <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
 
-        {/* Charts Row 1 */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Evolución temporal */}
-          <div className="card p-5">
-            <h3 className="section-title mb-4">Evolución últimos 30 días</h3>
+          {/* Area chart */}
+          <div className="lg:col-span-3 card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Evolución últimos 30 días</h3>
+                <p className="text-xs text-gray-400">Tendencia diaria de revisiones</p>
+              </div>
+              <Activity size={18} className="text-gray-300" />
+            </div>
             {evolucion.length > 0 ? (
               <ResponsiveContainer width="100%" height={220}>
-                <LineChart data={evolucion}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="fecha" tick={{ fontSize: 10 }} tickFormatter={d => d.slice(5)} />
-                  <YAxis tick={{ fontSize: 10 }} />
-                  <Tooltip labelFormatter={d => formatDate(d)} />
-                  <Legend />
-                  <Line type="monotone" dataKey="con_disco"    name="Con disco"    stroke="#16a34a" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="sin_disco"    name="Sin disco"    stroke="#dc2626" strokeWidth={2} dot={false} />
-                  <Line type="monotone" dataKey="posible_robo" name="Posible robo" stroke="#d97706" strokeWidth={2} dot={false} />
-                </LineChart>
+                <AreaChart data={evolucion} margin={{ top: 5, right: 5, bottom: 0, left: -15 }}>
+                  <defs>
+                    <linearGradient id="gradCon" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#10b981" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                    </linearGradient>
+                    <linearGradient id="gradRobo" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%"  stopColor="#ef4444" stopOpacity={0.3} />
+                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
+                  <XAxis dataKey="fecha" tick={{ fontSize: 10, fill: '#94a3b8' }} tickFormatter={d => d.slice(5)} />
+                  <YAxis tick={{ fontSize: 10, fill: '#94a3b8' }} />
+                  <Tooltip content={<CustomTooltip />} labelFormatter={d => formatDate(d)} />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  <Area type="monotone" dataKey="con_disco"    name="Con disco"    stroke="#10b981" strokeWidth={2} fill="url(#gradCon)"  dot={false} />
+                  <Area type="monotone" dataKey="sin_disco"    name="Sin disco"    stroke="#64748b" strokeWidth={1.5} fill="none" strokeDasharray="4 4" dot={false} />
+                  <Area type="monotone" dataKey="posible_robo" name="Posible robo" stroke="#ef4444" strokeWidth={2} fill="url(#gradRobo)" dot={false} />
+                </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <div className="flex items-center justify-center h-48 text-sm text-gray-400">
-                Sin datos suficientes
+              <div className="flex flex-col items-center justify-center h-48 text-gray-300">
+                <TrendingUp size={32} className="mb-2" />
+                <span className="text-sm">Sin datos suficientes</span>
               </div>
             )}
           </div>
 
-          {/* Estado de discos */}
-          <div className="card p-5">
-            <h3 className="section-title mb-4">Estado de discos</h3>
+          {/* Donut chart */}
+          <div className="lg:col-span-2 card p-5">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="text-sm font-semibold text-gray-800">Distribución de discos</h3>
+                <p className="text-xs text-gray-400">Estado actual de la flota</p>
+              </div>
+              <Disc size={18} className="text-gray-300" />
+            </div>
             {discoData.length > 0 ? (
-              <div className="flex items-center gap-4">
-                <ResponsiveContainer width="50%" height={200}>
+              <>
+                <ResponsiveContainer width="100%" height={170}>
                   <PieChart>
-                    <Pie data={discoData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={3} dataKey="value">
-                      {discoData.map((entry, i) => <Cell key={i} fill={entry.color} />)}
+                    <Pie
+                      data={discoData} cx="50%" cy="50%"
+                      innerRadius={52} outerRadius={75}
+                      paddingAngle={3} dataKey="value"
+                    >
+                      {discoData.map((entry, i) => <Cell key={i} fill={entry.color} strokeWidth={0} />)}
                     </Pie>
-                    <Tooltip />
+                    <Tooltip
+                      formatter={(v, name) => [`${v} bus${v !== 1 ? 'es' : ''}`, name]}
+                      contentStyle={{ fontSize: 12, borderRadius: 8, border: '1px solid #e2e8f0' }}
+                    />
                   </PieChart>
                 </ResponsiveContainer>
-                <div className="flex flex-col gap-2">
+                <div className="grid grid-cols-2 gap-y-2 gap-x-3 mt-1">
                   {discoData.map((d, i) => (
                     <div key={i} className="flex items-center gap-2">
-                      <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: d.color }} />
-                      <span className="text-xs text-gray-600">{d.name}: <span className="font-bold">{d.value}</span></span>
+                      <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: d.color }} />
+                      <span className="text-xs text-gray-500">{d.name}</span>
+                      <span className="text-xs font-bold text-gray-800 ml-auto">{d.value}</span>
                     </div>
                   ))}
                 </div>
-              </div>
+              </>
             ) : (
-              <div className="flex items-center justify-center h-48 text-sm text-gray-400">Sin datos</div>
+              <div className="flex flex-col items-center justify-center h-48 text-gray-300">
+                <Disc size={32} className="mb-2" />
+                <span className="text-sm">Sin datos</span>
+              </div>
             )}
           </div>
         </div>
 
-        {/* Charts Row 2 */}
+        {/* Terminal performance + recent tickets */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Revisiones por terminal */}
+
+          {/* Terminal performance */}
           <div className="card p-5">
-            <h3 className="section-title mb-4">Revisiones por terminal</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-800">Rendimiento por terminal</h3>
+              <span className="text-xs text-gray-400">Total · sin disco</span>
+            </div>
             {terminales.length > 0 ? (
-              <ResponsiveContainer width="100%" height={220}>
-                <BarChart data={terminales} layout="vertical">
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis type="number" tick={{ fontSize: 10 }} />
-                  <YAxis type="category" dataKey="terminal" tick={{ fontSize: 10 }} width={90} />
-                  <Tooltip />
-                  <Legend />
-                  <Bar dataKey="total"     name="Total"     fill="#2563eb" radius={[0, 4, 4, 0]} />
-                  <Bar dataKey="sin_disco" name="Sin disco" fill="#dc2626" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
+              <div className="space-y-3">
+                {terminales.map((t, i) => {
+                  const incPct = pct(t.sin_disco, t.total)
+                  const barWidth = terminales[0].total > 0 ? `${(t.total / terminales[0].total) * 100}%` : '0%'
+                  const [barColor, badge, badgeLabel] =
+                    incPct < 10
+                      ? ['bg-emerald-500', 'bg-emerald-100 text-emerald-700', 'Óptimo']
+                      : incPct < 25
+                        ? ['bg-amber-500',  'bg-amber-100 text-amber-700',   'Alerta']
+                        : ['bg-red-500',    'bg-red-100 text-red-700',       'Crítico']
+                  return (
+                    <div key={i}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-gray-300 w-4">{i + 1}</span>
+                          <span className="text-sm font-medium text-gray-800">{t.terminal}</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className={`text-xs px-1.5 py-0.5 rounded-full font-semibold ${badge}`}>{badgeLabel}</span>
+                          <span className="text-xs text-gray-400">{t.total} · {t.sin_disco}</span>
+                        </div>
+                      </div>
+                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                        <div className={`h-full ${barColor} rounded-full`} style={{ width: barWidth }} />
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
             ) : (
-              <div className="flex items-center justify-center h-48 text-sm text-gray-400">Sin datos</div>
+              <div className="flex items-center justify-center h-32 text-gray-300 text-sm">Sin datos</div>
             )}
           </div>
 
-          {/* Candados */}
+          {/* Recent open tickets */}
           <div className="card p-5">
-            <h3 className="section-title mb-4">Estado de candados</h3>
-            {candadoData.some(d => d.value > 0) ? (
-              <div className="flex items-center gap-4">
-                <ResponsiveContainer width="50%" height={200}>
-                  <PieChart>
-                    <Pie data={candadoData} cx="50%" cy="50%" innerRadius={55} outerRadius={80} paddingAngle={3} dataKey="value">
-                      <Cell fill="#16a34a" />
-                      <Cell fill="#d97706" />
-                    </Pie>
-                    <Tooltip />
-                  </PieChart>
-                </ResponsiveContainer>
-                <div className="flex flex-col gap-3">
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-green-600" />
-                    <span className="text-xs text-gray-600">Con candado: <span className="font-bold">{kpis?.conCandado ?? 0}</span></span>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-800">Tickets abiertos recientes</h3>
+              {kpis?.ticketsAbiertos > 0 && (
+                <span className="flex items-center gap-1 text-xs bg-red-100 text-red-700 px-2 py-0.5 rounded-full font-semibold">
+                  <AlertCircle size={11} />
+                  {kpis.ticketsAbiertos} activo{kpis.ticketsAbiertos > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            {tickets.length > 0 ? (
+              <div className="space-y-2">
+                {tickets.map((t, i) => (
+                  <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg bg-red-50 border border-red-100">
+                    <div className="w-7 h-7 rounded-full bg-red-500 flex items-center justify-center flex-shrink-0">
+                      <AlertTriangle size={13} className="text-white" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-0.5">
+                        <span className="text-xs font-bold text-gray-800">{t.codigo}</span>
+                        <span className={`text-xs px-1.5 py-0.5 rounded font-medium ${
+                          t.estado === 'ABIERTO' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'
+                        }`}>
+                          {t.estado === 'ABIERTO' ? 'Abierto' : 'En revisión'}
+                        </span>
+                      </div>
+                      <p className="text-xs text-gray-500 truncate">
+                        {t.buses?.ppu || '—'}
+                        {t.buses?.numero_interno ? ` · NI ${t.buses.numero_interno}` : ''}
+                        {t.terminales?.nombre ? ` · ${t.terminales.nombre}` : ''}
+                      </p>
+                    </div>
+                    {t.impacto_estimado ? (
+                      <span className="text-xs font-black text-red-600 flex-shrink-0">{formatCurrency(t.impacto_estimado)}</span>
+                    ) : null}
                   </div>
-                  <div className="flex items-center gap-2">
-                    <div className="w-3 h-3 rounded-full bg-amber-500" />
-                    <span className="text-xs text-gray-600">Sin candado: <span className="font-bold">{kpis?.sinCandado ?? 0}</span></span>
-                  </div>
-                </div>
+                ))}
               </div>
             ) : (
-              <div className="flex items-center justify-center h-48 text-sm text-gray-400">Sin datos</div>
+              <div className="flex flex-col items-center justify-center h-32 text-gray-300">
+                <CheckCircle size={32} className="mb-2 text-emerald-400" />
+                <span className="text-sm text-gray-500">Sin tickets abiertos</span>
+                <span className="text-xs text-gray-300 mt-0.5">La flota está en orden</span>
+              </div>
             )}
           </div>
         </div>
 
-        {/* Rankings */}
+        {/* Model vulnerability + other indicators */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          {/* Modelos con más vulnerabilidad */}
+
+          {/* Model vulnerability ranking */}
           <div className="card p-5">
-            <h3 className="section-title mb-4">Modelos con más incidentes</h3>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-sm font-semibold text-gray-800">Vulnerabilidad por modelo</h3>
+              <span className="text-xs text-gray-400">% revisiones sin disco</span>
+            </div>
             {modelos.length > 0 ? (
-              <div className="space-y-2">
-                {modelos.map((m, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-gray-400 w-5">{i + 1}</span>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-sm font-medium text-gray-800">{m.modelo}</span>
-                        <span className="text-xs text-gray-500">{m.sin_disco} sin disco</span>
+              <div className="space-y-3">
+                {modelos.map((m, i) => {
+                  const p = pct(m.sin_disco, m.total)
+                  const barColor = p > 30 ? '#ef4444' : p > 15 ? '#f97316' : '#f59e0b'
+                  return (
+                    <div key={i}>
+                      <div className="flex items-center justify-between mb-1.5">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-gray-300 w-4">{i + 1}</span>
+                          <span className="text-sm font-medium text-gray-800">{m.modelo}</span>
+                        </div>
+                        <div className="text-right">
+                          <span className="text-xs font-black text-gray-800">{p}%</span>
+                          <span className="text-xs text-gray-400 ml-1">({m.sin_disco}/{m.total})</span>
+                        </div>
                       </div>
-                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
+                      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
                         <div
-                          className="h-full bg-red-400 rounded-full transition-all"
-                          style={{ width: m.total > 0 ? `${(m.sin_disco / m.total) * 100}%` : '0%' }}
+                          className="h-full rounded-full transition-all duration-500"
+                          style={{ width: `${p}%`, background: barColor }}
                         />
                       </div>
                     </div>
-                    <span className="text-xs text-gray-400">{m.total}</span>
-                  </div>
-                ))}
+                  )
+                })}
               </div>
             ) : (
-              <div className="flex items-center justify-center h-24 text-sm text-gray-400">Sin datos</div>
+              <div className="flex items-center justify-center h-24 text-gray-300 text-sm">Sin datos</div>
             )}
           </div>
 
-          {/* Terminales con más incidentes */}
+          {/* Other indicators */}
           <div className="card p-5">
-            <h3 className="section-title mb-4">Terminales con más incidentes</h3>
-            {terminales.filter(t => t.sin_disco > 0).length > 0 ? (
-              <div className="space-y-2">
-                {terminales.filter(t => t.sin_disco > 0).slice(0, 6).map((t, i) => (
-                  <div key={i} className="flex items-center gap-3">
-                    <span className="text-xs font-bold text-gray-400 w-5">{i + 1}</span>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between mb-0.5">
-                        <span className="text-sm font-medium text-gray-800">{t.terminal}</span>
-                        <span className="text-xs text-gray-500">{t.sin_disco} sin disco</span>
-                      </div>
-                      <div className="h-1.5 bg-gray-100 rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-amber-400 rounded-full"
-                          style={{ width: t.total > 0 ? `${(t.sin_disco / t.total) * 100}%` : '0%' }}
-                        />
-                      </div>
-                    </div>
+            <h3 className="text-sm font-semibold text-gray-800 mb-4">Otros indicadores</h3>
+            <div className="space-y-3">
+              {[
+                { label: 'Cerraduras malas',    value: kpis?.cerrMalas   ?? 0, Icon: AlertTriangle, bg: 'bg-amber-50',  iconBg: 'bg-amber-500',  textColor: 'text-amber-600',  desc: 'revisiones con cerraduras en mal estado' },
+                { label: 'Sin seguridad extra', value: kpis?.sinSegExtra ?? 0, Icon: ShieldCheck,   bg: 'bg-slate-50',  iconBg: 'bg-slate-400',  textColor: 'text-slate-600',  desc: 'revisiones sin seguridad extra'          },
+                { label: 'Sin candado',         value: kpis?.sinCandado  ?? 0, Icon: Lock,          bg: 'bg-orange-50', iconBg: 'bg-orange-500', textColor: 'text-orange-600', desc: 'revisiones sin candado instalado'        },
+                { label: 'Enviados a SRL',      value: kpis?.retiradoSRL ?? 0, Icon: Wrench,        bg: 'bg-blue-50',   iconBg: 'bg-blue-500',   textColor: 'text-blue-600',   desc: 'discos en servicio técnico'             }
+              ].map(({ label, value, Icon, bg, iconBg, textColor, desc }, i) => (
+                <div key={i} className={`flex items-center gap-3 p-3 rounded-lg ${bg}`}>
+                  <div className={`w-8 h-8 ${iconBg} rounded-lg flex items-center justify-center flex-shrink-0`}>
+                    <Icon size={15} className="text-white" />
                   </div>
-                ))}
-              </div>
-            ) : (
-              <div className="flex items-center justify-center h-24 text-sm text-gray-400">Sin incidentes registrados</div>
-            )}
+                  <div className="flex-1">
+                    <p className="text-sm font-semibold text-gray-800">{label}</p>
+                    <p className="text-xs text-gray-400">{desc}</p>
+                  </div>
+                  <span className={`text-2xl font-black ${textColor}`}>{value}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
+
       </div>
     </div>
   )

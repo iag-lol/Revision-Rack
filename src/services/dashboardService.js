@@ -91,3 +91,18 @@ export const getModelosVulnerabilidad = async () => {
   }
   return Object.values(map).sort((a, b) => b.sin_disco - a.sin_disco).slice(0, 6)
 }
+
+export const getRecentOpenTickets = async (limit = 5) => {
+  const { data, error } = await supabase
+    .from('tickets_robo')
+    .select(`
+      id, codigo, estado, impacto_estimado, fecha_alerta, nivel_riesgo,
+      buses(ppu, numero_interno),
+      terminales(nombre)
+    `)
+    .in('estado', ['ABIERTO', 'EN_REVISION'])
+    .order('fecha_alerta', { ascending: false })
+    .limit(limit)
+  if (error) throw error
+  return data || []
+}
